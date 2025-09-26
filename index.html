@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Flappy Dac</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#70c5ce; font-family: system-ui, sans-serif; }
+  #wrap { display:flex; align-items:center; justify-content:center; height:100%; }
+  canvas { background: linear-gradient(#70c5ce, #b2e0f2); touch-action: manipulation; }
+  .hud {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.25); color:#fff; padding:6px 10px; border-radius:8px;
+    font-weight:700; letter-spacing:.5px;
+  }
+  .btn {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background:#ffcc00; border:0; border-radius:10px; padding:10px 16px; font-weight:800;
+    box-shadow: 0 4px #d3a800; cursor:pointer;
+  }
+</style>
+
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Flappy Mini">
+<script>
+// Register service worker for offline play
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(console.error);
+  });
+}
+</script>
+
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="480" height="640"></canvas></div>
+<div class="hud" id="score">SCORE: 0</div>
+<button class="btn" id="tapHint">Apasa pentru start & salt</button>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const tapHint = document.getElementById('tapHint');
+
+  // Device pixel ratio for crisp canvas
+  function fitCanvas() {
+    const targetW = 480, targetH = 640;
+    // keep aspect ratio, scale to fit screen width
+    const scale = Math.min(window.innerWidth / targetW, window.innerHeight / targetH);
+    const cssW = Math.round(targetW * scale);
+    const cssH = Math.round(targetH * scale);
+    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    canvas.width = targetW * dpr;
+    canvas.height = targetH * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in logical units
+  }
+  fitCanvas();
+  addEventListener('resize', fitCanvas);
+
+  // Game state
+  const GRAVITY = 0.45;
+  const JUMP = -7.5;
+  const PIPE_GAP_BASE = 140;
+  const PIPE_WIDTH = 60;
+  const PIPE_SPACING = 180; // distance between pipe pairs
+  const SPEED = 2.3;
+
+  let running = false;
+  let gameOver = false;
+  let score = 0, best = 0;
+  let t = 0;
+
+  const bird = {
+    x: 120, y: 320, vy: 0, r: 14, rot: 0,
+    reset() { this.x = 120; this.y = 320; this.vy = 0; this.rot = 0; }
+  };
+
+  /** Pipes array: each item {x, topH, gap} */
+  let pipes = [];
+
+  function resetGame() {
+    score = 0; t = 0; gameOver = false;
+    bird.reset();
+    pipes = [];
+    makePipe(520);
+    makePipe(520 + PIPE_SPACING);
+    makePipe(520 + PIPE_SPACING * 2);
+    updateHUD();
+  }
+
+  function makePipe(x) {
+    const amp = 80; // vertical variance
+    const baseTop = 200 + Math.sin(t * 0.03) * amp;
+    const gap = PIPE_GAP_BASE + Math.max(0, 8 - Math.min(score, 8)) * 2; // tiny dynamic
+    const topH = Math.max(40, Math.min(460, baseTop)) - gap/2;
+    pipes.push({ x, topH, gap, passed:false });
+  }
+
+  function flap() {
+    if (!running) { running = true; resetGame(); }
+    if (gameOver) { running = true; resetGame(); }
+    bird.vy = JUMP;
+  }
+
+  // Controls
+  canvas.addEventListener('pointerdown', flap);
+  tapHint.addEventListener('click', flap);
+  addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); flap(); }
+    if (e.code === 'Enter' && gameOver) { flap(); }
+  });
+
+  function updateHUD() {
+    scoreEl.textContent = `SCORE: ${score}  ${best ? `BEST: ${best}` : ''}`;
+  }
+
+  // Simple ground stripe animation
+  function drawGround(offset) {
+    const y = 600, h = 40;
+    ctx.fillStyle = '#dedc8a';
+    ctx.fillRect(0, y, 480, h);
+    ctx.fillStyle = '#c4c168';
+    for (let x = - (offset % 40); x < 480; x += 40) {
+      ctx.fillRect(x, y, 20, 6);
+    }
+  }
+
+  function drawBird() {
+    // body
+    ctx.save();
+    ctx.translate(bird.x, bird.y);
+    ctx.rotate(bird.rot);
+    // body
+    ctx.fillStyle = '#ffeb3b';
+    ctx.beginPath(); ctx.arc(0, 0, bird.r, 0, Math.PI * 2); ctx.fill();
+    // wing
+    ctx.fillStyle = '#fdd835';
+    ctx.beginPath(); ctx.arc(-4, 2, 8, 0, Math.PI * 2); ctx.fill();
+    // eye
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(6, -5, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(7.5, -5, 2, 0, Math.PI * 2); ctx.fill();
+    // beak
+    ctx.fillStyle = '#ff9800';
+    ctx.beginPath();
+    ctx.moveTo(bird.r - 2, 0); ctx.lineTo(bird.r + 10, -3); ctx.lineTo(bird.r + 10, 3); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPipes() {
+    ctx.fillStyle = '#4caf50';
+    pipes.forEach(p => {
+      // top pipe
+      ctx.fillRect(p.x, 0, PIPE_WIDTH, p.topH);
+      // bottom pipe
+      const bottomY = p.topH + p.gap;
+      ctx.fillRect(p.x, bottomY, PIPE_WIDTH, 640 - bottomY - 40);
+      // pipe rims
+      ctx.fillStyle = '#2e7d32';
+      ctx.fillRect(p.x - 2, p.topH - 10, PIPE_WIDTH + 4, 10);
+      ctx.fillRect(p.x - 2, p.topH + p.gap, PIPE_WIDTH + 4, 10);
+      ctx.fillStyle = '#4caf50';
+    });
+  }
+
+  function circleRectCollide(cx, cy, r, rx, ry, rw, rh) {
+    // Clamp circle center to rect
+    const testX = Math.max(rx, Math.min(cx, rx + rw));
+    const testY = Math.max(ry, Math.min(cy, ry + rh));
+    const dx = cx - testX, dy = cy - testY;
+    return (dx*dx + dy*dy) <= r*r;
+  }
+
+  function update(dt) {
+    if (!running || gameOver) return;
+
+    t += dt;
+
+    // bird physics
+    bird.vy += GRAVITY;
+    bird.y += bird.vy;
+    bird.rot = Math.max(-0.5, Math.min(1.0, bird.vy * 0.06));
+
+    // pipes move
+    for (const p of pipes) {
+      p.x -= SPEED;
+      // scoring
+      if (!p.passed && p.x + PIPE_WIDTH < bird.x) {
+        p.passed = true;
+        score++;
+        best = Math.max(best, score);
+        updateHUD();
+      }
+    }
+
+    // spawn / recycle pipes
+    if (pipes.length && pipes[0].x + PIPE_WIDTH < -10) pipes.shift();
+    const lastX = pipes.length ? pipes[pipes.length - 1].x : 520;
+    if (lastX < 480 - PIPE_SPACING) makePipe(lastX + PIPE_SPACING);
+
+    // collisions with ground / ceiling
+    if (bird.y - bird.r < 0 || bird.y + bird.r > 600) {
+      endGame();
+      return;
+    }
+
+    // collisions with pipes
+    for (const p of pipes) {
+      if (circleRectCollide(bird.x, bird.y, bird.r, p.x, 0, PIPE_WIDTH, p.topH) ||
+          circleRectCollide(bird.x, bird.y, bird.r, p.x, p.topH + p.gap, PIPE_WIDTH, 640 - (p.topH + p.gap) - 40)) {
+        endGame();
+        return;
+      }
+    }
+  }
+
+  function endGame() {
+    gameOver = true;
+    running = false;
+    tapHint.textContent = 'Ai pierdut 😅 Tap / Enter pentru restart';
+    tapHint.style.display = 'block';
+  }
+
+  function draw() {
+    // sky
+    const skyGrad = ctx.createLinearGradient(0,0,0,640);
+    skyGrad.addColorStop(0,'#70c5ce');
+    skyGrad.addColorStop(1,'#b2e0f2');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0,0,480,640);
+
+    // clouds (parallax)
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    const cloudOffset = (t * SPEED * 0.25) % 240;
+    for (let x = -cloudOffset; x < 520; x += 240) {
+      ctx.beginPath(); ctx.arc(x+60,100,25,0,Math.PI*2);
+      ctx.arc(x+85,95,18,0,Math.PI*2);
+      ctx.arc(x+100,110,22,0,Math.PI*2);
+      ctx.fill();
+    }
+
+    drawPipes();
+    drawGround(t * SPEED * 4);
+    drawBird();
+
+    if (!running) {
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(60, 220, 360, 120);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 24px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(gameOver ? 'GAME OVER' : 'FLAPPY MINI', 240, 260);
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillText('Tap / Space pentru a sari', 240, 290);
+      ctx.fillText('Treci printre tevi, nu atinge nimic!', 240, 316);
+    }
+  }
+
+  // Main loop
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(30, now - last) / 16.6667; // ~frames
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // initial UI
+  tapHint.style.display = 'block';
+})();
+</script>
+</body>
+</html>
